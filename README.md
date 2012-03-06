@@ -49,13 +49,14 @@ dir/
     $queue_id/
       $sequence_number - The smaller the file number is, the closer
                      the corresponding message is to the head of the
-                     queue. This file contains details of the message
-                     in its location within the queue. The message_id
-                     is indicated which can then be cross-referenced
-                     into the messages directory. Also indicated is
-                     whether the message has already been delivered,
-                     and whether it has been acknowledged, along with
-                     other properties such as queue-TTL, if in use.
+                     queue. This file is also an Erlang term file, and
+                     contains details of the message in its location
+                     within the queue. The message_id is indicated
+                     which can then be cross-referenced into the
+                     messages directory. Also indicated is whether the
+                     message has already been delivered, and whether
+                     it has been acknowledged, along with other
+                     properties such as queue-TTL, if in use.
 
       Note that the $queue_id cannot be used to compute the original
       queue name: the conversion from queue name to queue_id is lossy.
