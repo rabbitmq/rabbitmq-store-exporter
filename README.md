@@ -1,0 +1,1 @@
+RabbitMQ Store Exporter Plugin

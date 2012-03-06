@@ -1,0 +1,6 @@
+{application, rabbitmq_store_exporter,
+ [{description, "Store Exporter for RabbitMQ"},
+  {vsn, "%%VSN%%"},
+  {modules, []},
+  {registered, []},
+  {applications, []}]}.
