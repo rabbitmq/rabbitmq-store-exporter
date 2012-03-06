@@ -36,12 +36,29 @@
 export() ->
     case application:get_env(?APP, directory) of
         {ok, TargetDir} ->
-            ok = rabbit_file:ensure_dir(filename:join(TargetDir, "nothing")),
+            TargetMsgsDir = filename:join(TargetDir, "messages"),
+            TargetQueuesDir = filename:join(TargetDir, "queues"),
+            [ok = rabbit_file:ensure_dir(filename:join(Dir, "nothing"))
+             || Dir <- [TargetMsgsDir, TargetQueuesDir]],
             Base = rabbit_mnesia:dir(),
             case rabbit_file:is_dir(Base) of
                 true ->
-                    [msg_store(TargetDir, filename:join(Base, Store)) ||
-                        Store <- [?PERSISTENT_MSG_STORE, ?TRANSIENT_MSG_STORE]],
+                    QueuesDir = filename:join(rabbit_mnesia:dir(), "queues"),
+                    {ok, Gatherer} = gatherer:start_link(),
+                    [fork(Gatherer, fun () ->
+                                            queue(TargetQueuesDir, QueuesDir,
+                                                  QueueDirName)
+                                    end)
+                     || QueueDirName <- filelib:wildcard("*", QueuesDir)],
+                    [fork(Gatherer,
+                          fun () ->
+                                  msg_store(TargetMsgsDir,
+                                            filename:join(Base, Store))
+                          end)
+                     || Store <- [?PERSISTENT_MSG_STORE, ?TRANSIENT_MSG_STORE]],
+                    empty = gatherer:out(Gatherer),
+                    unlink(Gatherer),
+                    ok = gatherer:stop(Gatherer),
                     ok;
                 false ->
                     ok
@@ -51,6 +68,52 @@ export() ->
               "~s: No directory configured for export. Aborting~n", [?APP]),
             ok
     end.
+
+fork(Gatherer, Fun) ->
+    ok = gatherer:fork(Gatherer),
+    ok = worker_pool:submit_async(
+           fun () ->
+                   link(Gatherer),
+                   Fun(),
+                   ok = gatherer:finish(Gatherer),
+                   unlink(Gatherer),
+                   ok
+           end).
+
+%%----------------------------------------------------------------------------
+%% Queue Index
+%%----------------------------------------------------------------------------
+
+queue(TargetDir, QueuesDir, QueueDirName) ->
+    QueueIndexDir = filename:join(QueuesDir, QueueDirName),
+    TargetQueueDir = filename:join(TargetDir, QueueDirName),
+    ok = rabbit_file:ensure_dir(filename:join(TargetQueueDir, "nothing")),
+    case rabbit_file:is_dir(QueueIndexDir) of
+        true ->
+            ok = rabbit_queue_index:scan(
+                   QueueIndexDir, dump_queue_fun(TargetQueueDir), ok);
+        false ->
+            ok
+    end.
+
+dump_queue_fun(TargetDir) ->
+    fun (SeqId, MsgId, MsgProps, IsPersistent, IsDelivered, IsAcked, Acc) ->
+            MsgProps1 =
+                dump_fields(
+                  MsgProps, record_info(fields, message_properties), []),
+            ok = write_term_file(
+                   filename:join(TargetDir, rabbit_misc:format("~w", [SeqId])),
+                   [[{message_id, rabbit_guid:string(MsgId, "msg")},
+                     {message_properties, MsgProps1},
+                     {is_persistent, IsPersistent},
+                     {is_delivered, del =:= IsDelivered},
+                     {is_acknowledged, ack =:= IsAcked}]]),
+            Acc
+    end.
+
+%%----------------------------------------------------------------------------
+%% Msg Store
+%%----------------------------------------------------------------------------
 
 msg_store(TargetDir, MsgStoreDir) ->
     case rabbit_file:is_dir(MsgStoreDir) of
@@ -104,6 +167,11 @@ dump_msg_fun(SrcPath, TargetDir) ->
             end
     end.
 
+
+%%----------------------------------------------------------------------------
+%% Misc
+%%----------------------------------------------------------------------------
+
 dump_fields(Record, Fields, Acc) ->
     {_, Terms} =
         lists:foldl(
@@ -114,8 +182,7 @@ dump_fields(Record, Fields, Acc) ->
     Terms.
 
 dump_msg_field(Msg, content = FieldName, FieldIdx) ->
-    Content = #content{ class_id       = ClassId,
-                        properties     = Props } =
+    Content = #content{ properties = Props } =
         rabbit_binary_parser:ensure_content_decoded(element(FieldIdx, Msg)),
     Props1 = case Props of
                  #'P_basic'{} ->
@@ -125,6 +192,8 @@ dump_msg_field(Msg, content = FieldName, FieldIdx) ->
              end,
     {FieldName, dump_fields(Content #content { properties = Props1 },
                             record_info(fields, content), [])};
+dump_msg_field(Msg, id = FieldName, FieldIdx) ->
+    {FieldName, rabbit_guid:string(element(FieldIdx, Msg), "msg")};
 dump_msg_field(Msg, exchange_name, FieldIdx) ->
     {exchange, rabbit_misc:rs(element(FieldIdx, Msg))};
 dump_msg_field(Msg, routing_keys = FieldName, FieldIdx) ->
