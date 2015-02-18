@@ -1,6 +1,3 @@
-**Repository [moved to GitHub](https://github.com/rabbitmq/rabbitmq-store-exporter)**.
-This is a stale read-only repository.
-
 RabbitMQ Store Exporter Plugin
 ==============================
 
